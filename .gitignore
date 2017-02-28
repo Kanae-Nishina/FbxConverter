@@ -1,0 +1,10 @@
+*.suo
+FbxConvert/Debug/
+*.filters
+*.png
+*.fbx
+*.sln
+*.dds
+*.db
+Debug/
+*.opendb
