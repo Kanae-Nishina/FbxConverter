@@ -8,3 +8,4 @@ FbxConvert/Debug/
 *.db
 Debug/
 *.opendb
+*.user

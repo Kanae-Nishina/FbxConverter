@@ -15,6 +15,8 @@ DirectX::DirectX()
 	, m_backBuffer_TexRTV(nullptr)
 	, m_backBuffer_DSTexDSV(nullptr)
 	, m_backBuffer_DSTex(nullptr)
+	,m_camera(nullptr)
+	, m_model(nullptr)
 {
 }
 
@@ -133,6 +135,10 @@ LRESULT DirectX::MsgProc(HWND hWnd, UINT iMsg, WPARAM wParam, LPARAM lParam)
 */
 void DirectX::AppInit()
 {
+	m_camera = new Camera;
+	m_model = new FbxModel;
+	m_model->Init(m_device, m_deviceContext);
+	m_model->LoadFBX("Assets/model1.fbx");
 }
 
 /*
@@ -142,13 +148,14 @@ void DirectX::Update()
 {
 	//描画
 	//画面クリア
-	float ClearColor[4] = { 0,0,0,0 };
+	float ClearColor[4] = { 0,0,1,1 };
 	m_deviceContext->ClearRenderTargetView(m_backBuffer_TexRTV, ClearColor);
 	m_deviceContext->ClearDepthStencilView(m_backBuffer_DSTexDSV, D3D11_CLEAR_DEPTH, 1.0f, 0);
 
 	//カメラの設定
 	SetCamera();
-
+	m_model->Render({ 0,0,-5 }, 1, 1);
+	m_camera->Render();
 	//画面の更新
 	m_swapChain->Present(0, 0);
 }
@@ -158,6 +165,7 @@ void DirectX::Update()
 */
 void  DirectX::SetCamera()
 {
+	m_model->SetCamera(Camera::GetView(), Camera::GetProj());
 }
 
 /*
@@ -201,6 +209,8 @@ void DirectX::Loop()
 */
 void DirectX::DestroyD3D()
 {
+	SAFE_DELETE(m_camera);
+	SAFE_RELEASE(m_model);
 	SAFE_RELEASE(m_swapChain);
 	SAFE_RELEASE(m_backBuffer_TexRTV);
 	SAFE_RELEASE(m_backBuffer_DSTexDSV);

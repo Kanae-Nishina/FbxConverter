@@ -1,146 +1,124 @@
 /*
 	@file			FbxLoader.h
-	@brief		FBXファイルのローダー
+	@brief		FBXファイルのローダ
 	@date		2017/02/25
 	@author	仁科香苗
+	@note		参照(https://github.com/shaderjp/FBXLoader2015forDX11)
 */
 #pragma once
 #include <vector>
 #include <string>
+#include <memory>
 #include <unordered_map>
-#include <cassert>
+#include <windows.h>
 #include <fbxsdk.h>
-#include <d3dx9.h>
+using namespace fbxsdk;
+// UVSet名, 頂点内のUVセット順序
+typedef std::tr1::unordered_map<std::string, int> UVsetID;
+// UVSet名, テクスチャパス名
+typedef std::tr1::unordered_map<std::string, std::vector<std::string>> TextureSet;
 
-#pragma comment(lib, "libfbxsdk-md.lib")
-#pragma comment(lib,"d3d9.lib")
-#pragma comment(lib,"d3dx9.lib")
-
-//UVセット名の名前とテクスチャのファイル名を紐づけ 
-typedef std::unordered_map <std::string, std::vector<std::string>> TextureSet;
-
- //UVセットの名前に番号付け
-typedef std::unordered_map <std::string, int> UVSetID;
-
-//個別のマテリアル要素
-struct FbxMaterialElement
+//マテリアル構成
+struct FBX_MATERIAL_ELEMENT
 {
-	//種別
 	enum MaterialElementType
 	{
-		eNone=0,
-		eColor,		//カラーのみ
-		eTexture,	//テクスチャのみ
-		eBoth,		//カラーとテクスチャ両方
-		eMax,
+		ELEMENT_NONE = 0,
+		ELEMENT_COLOR,
+		ELEMENT_TEXTURE,
+		ELEMENT_BOTH,
+		ELEMENT_MAX,
 	};
 	MaterialElementType type;
+	float r, g, b, a;
+	TextureSet textureSetArray;
 
-	//色
-	float r;
-	float g;
-	float b;
-	float a;
-
-	//テクスチャ
-	TextureSet textureSets;
-	
-	~FbxMaterialElement();
+	FBX_MATERIAL_ELEMENT();
+	~FBX_MATERIAL_ELEMENT();
 	void Release();
 };
 
-//マテリアル
-struct FbxMaterialNode
+//マテリアルのノード
+struct FBX_MATERIAL_NODE
 {
-	//サーフェイスの種類
 	enum MaterialType
 	{
-		eLambert,		//ランバート
-		ePhong,			//フォン
+		MATERIAL_LAMBERT = 0,
+		MATERIAL_PHONG,
 	};
 	MaterialType type;
-
-	//マテリアルデータ
-	FbxMaterialElement diffuse;		//拡散反射光
-	FbxMaterialElement specular;	//鏡面反射光
-	FbxMaterialElement ambient;	//環境光
-	FbxMaterialElement emissive;	//自己発光
-
-	float shininess;		// スペキュラの強さ
-	float transparency; // 透過度 
+	FBX_MATERIAL_ELEMENT ambient;
+	FBX_MATERIAL_ELEMENT diffuse;
+	FBX_MATERIAL_ELEMENT emmisive;
+	FBX_MATERIAL_ELEMENT specular;
+	float shininess;
+	float transparencyFactor;
 };
 
-//メッシュの要素数
-struct MeshElements
+//メッシュ構成要素
+struct MESH_ELEMENTS
 {
-	uint32_t numPosition;
-	uint32_t numNormal;
-	uint32_t numUVSet;
-
-	MeshElements();
+	unsigned int numPosition;	//頂点座標セット数
+	unsigned int numNormal;	//法線情報
+	unsigned int numUVSet;		//UVセット数
 };
 
-//メッシュ
-struct FbxMeshNode
+//メッシュのノード
+struct FBX_MESH_NODE
 {
-	std::string name;			//ノード名
-	std::string parentName;	//親ノード名
+	std::string		name;				//ノード名
+	std::string		parentName;		//親ノード名(親がいないなら"null"という名称が入る.rootノードの対応)
 
-	MeshElements elements;
+	MESH_ELEMENTS								elements;				//メッシュが保持するデータ構造
+	std::vector<FBX_MATERIAL_NODE>	materialArray;		//マテリアル
+	UVsetID												uvsetID;
 
-	//マテリアル
-	std::vector<FbxMaterialNode> materials;
-	//UVのセット順序
-	UVSetID uvSetID;
+	std::vector<unsigned int>			indexArray;			//インデックス配列
+	std::vector<FbxVector4>			positionArray;		//ポジション配列
+	std::vector<FbxVector4>			normalArray;			//法線配列
+	std::vector<FbxVector2>			texcoordArray;		//テクスチャ座標配列
 
-	//頂点データ
-	std::vector<uint32_t>		indices;			//インデックス
-	std::vector<FbxVector4>	positions;		//座標
-	std::vector<FbxVector4>	normals;		//法線
-	std::vector<FbxVector2>	texCoords;		//UV座標
+	float	mat4x4[16];	// Matrix
 
-	//メッシュのローカルマトリクス
-	float mat4x4[16];
-
-	~FbxMeshNode();
+	~FBX_MESH_NODE();
 	void Release();
 };
 
-//FBXローダークラス
-//FBXをパースシテ必要なデータを抜き出して保持する
+//ロードクラス
 class FbxLoader
 {
-protected:
-	//インポートに必要な変数群
-	FbxManager*							m_manager;
-	FbxScene*								m_scene;
-	FbxImporter*							m_importer;
-	std::vector<FbxMeshNode>	m_meshNodes;	//ローダーにより構築されるメッシュノード
-
-	//FBX全体のパース
-	void SetUp();	
-	//ノードをパース
-	void SetUpNode(FbxNode* node, std::string& parentName);
-	//頂点データのコピー
-	void CopyVertex(FbxMesh* mesh, FbxMeshNode* meshNode);
-	//マテリアルのコピー
-	void CopyMaterial(FbxSurfaceMaterial* material, FbxMaterialNode* materialNode);
-	//ノード内の行列を計算
-	void ComputeNodeMatrix(FbxNode* node, FbxMeshNode* meshNode);
-	//FBX用カラーデータをマテリアルにコピー
-	void SetFbxColor(FbxMaterialElement* element, const FbxDouble3 color);
-	//FBX用の行列データを通常にfloat配列にコピー
-	static void FbxMatrixToFloat16(FbxMatrix* matrix, float array[16]);
-	//マテリアル要素の取得
-	FbxDouble3 GetMaterialProperty(const FbxSurfaceMaterial* material, const char* propertyName, const char* factorPropertyName,FbxMaterialElement* element);
-
 public:
 	FbxLoader();
 	~FbxLoader();
 
-	bool LoadModel(const char* filename);		//ロード
-	void Release();											//データの解放
-	FbxMeshNode& GetNode(const uint32_t id);	//メッシュノード取得
-	std::size_t GetNodeCount();						//メッシュノード数取得
-};
+	void Release();
 
+	// 読み込み
+	HRESULT LoadFBX(const char* filename);
+	FbxNode&	GetRootNode();
+
+	size_t GetNodesCount() { return m_meshNodeArray.size(); };		// ノード数の取得
+
+	FBX_MESH_NODE&	GetNode(const unsigned int id);
+protected:
+	//FBX SDK
+	FbxManager*			m_sdkManager;
+	FbxScene*				m_scene;
+	FbxImporter*			m_importer;
+	FbxAnimLayer*		m_currentAnimLayer;
+
+	std::vector<FBX_MESH_NODE>		m_meshNodeArray;
+
+	//FBXのパース
+	void InitializeSdkObjects(FbxManager*& pManager, FbxScene*& pScene);
+	void TriangulateRecursive(FbxNode* pNode);
+	void SetupNode(FbxNode* pNode, std::string parentName);
+	void Setup();
+	void CopyVertexData(FbxMesh*	pMesh, FBX_MESH_NODE* meshNode);
+	void CopyMatrialData(FbxSurfaceMaterial* mat, FBX_MATERIAL_NODE* destMat);
+	void ComputeNodeMatrix(FbxNode* pNode, FBX_MESH_NODE* meshNode);
+	void SetFbxColor(FBX_MATERIAL_ELEMENT& destColor, const FbxDouble3 srcColor);
+	FbxDouble3 GetMaterialProperty(const FbxSurfaceMaterial * pMaterial,const char * pPropertyName,
+		const char * pFactorPropertyName,FBX_MATERIAL_ELEMENT*			pElement);
+	static void FBXMatrixToFloat16(FbxMatrix* src, float dest[16]);
+};

@@ -33,7 +33,7 @@ const int window_height = 600;
 const int fps = 60;
 
 //ウィンドウ名
-#define GAME_NAME "FbxConvert"
+#define GAME_NAME L"FbxConvert"
 
 //マクロ定義
 #define SAFE_DELETE(x) if(x){delete x; x=nullptr; };

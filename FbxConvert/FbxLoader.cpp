@@ -6,13 +6,21 @@
 */
 #include "FbxLoader.h"
 
-//========================
-//	FbxMaterialElement構造体
-//========================
+//=================================
+//	FBX_MATERIAL_ELEMENT構造体
+//=================================
 /*
-	@brief	FbxMaterialElementデストラクタ
+	@brief	コンストラクタ
 */
-FbxMaterialElement::~FbxMaterialElement()
+FBX_MATERIAL_ELEMENT::FBX_MATERIAL_ELEMENT()
+{
+	textureSetArray.clear();
+}
+
+/*
+	@brief	デストラクタ
+*/
+FBX_MATERIAL_ELEMENT::~FBX_MATERIAL_ELEMENT()
 {
 	Release();
 }
@@ -20,35 +28,22 @@ FbxMaterialElement::~FbxMaterialElement()
 /*
 	@brief	解放
 */
-void FbxMaterialElement::Release()
+void FBX_MATERIAL_ELEMENT::Release()
 {
-	for (auto it : textureSets)
+	for (TextureSet::iterator it = textureSetArray.begin(); it != textureSetArray.end(); ++it)
 	{
-		it.second.clear();
+		it->second.clear();
 	}
-	textureSets.clear();
+	textureSetArray.clear();
 }
 
-//========================
-//	MeshElements構造体
-//========================
+//=================================
+//	FBX_MESH_NODE構造体
+//=================================
 /*
-	@brief	MeshElementsコンストラクタ
+	@brief	デストラクタ
 */
-MeshElements::MeshElements()
-	:numPosition(0)
-	,numNormal(0)
-	,numUVSet(0)
-{
-}
-
-//========================
-//	FbxMeshNode構造体
-//========================
-/*
-	@brief	FbxMeshNodeデストラクタ
-*/
-FbxMeshNode::~FbxMeshNode()
+FBX_MESH_NODE::~FBX_MESH_NODE()
 {
 	Release();
 }
@@ -56,30 +51,30 @@ FbxMeshNode::~FbxMeshNode()
 /*
 	@brief	解放
 */
-void FbxMeshNode::Release()
+void FBX_MESH_NODE::Release()
 {
-	uvSetID.clear();
-	materials.clear();
-	indices.clear();
-	positions.clear();
-	normals.clear();
-	texCoords.clear();
+	uvsetID.clear();
+	texcoordArray.clear();
+	materialArray.clear();
+	indexArray.clear();
+	positionArray.clear();
+	normalArray.clear();
 }
-//========================
-//	FbxLoaderクラス
-//========================
+
+//=================================
+//	CFBXLoader構造体
+//=================================
 /*
-	@brief	FbxLoaderコンストラクタ
+	@brief	コンストラクタ
 */
 FbxLoader::FbxLoader()
-	:m_manager(nullptr)
-	,m_scene(nullptr)
-	,m_importer(nullptr)
+	:m_sdkManager(nullptr)
+	, m_scene(nullptr)
 {
 }
 
 /*
-	@brief	FbxLoaderデストラクタ
+	@brief	デストラクタ
 */
 FbxLoader::~FbxLoader()
 {
@@ -87,64 +82,12 @@ FbxLoader::~FbxLoader()
 }
 
 /*
-	@brief	モデルのロード
-*/
-bool FbxLoader::LoadModel(const char* filename)
-{
-	//fbxオブジェクトの生成
-	m_manager = FbxManager::Create();
-	auto ios = FbxIOSettings::Create(m_manager, IOSROOT);
-	m_manager->SetIOSettings(ios);
-
-	auto path = FbxGetApplicationDirectory();
-	m_manager->LoadPluginsDirectory(path.Buffer());
-
-	m_scene = FbxScene::Create(m_manager, "Scene");
-	m_importer = FbxImporter::Create(m_manager, "");
-
-	// インポート準備
-	int fileFormat = -1;
-	if (!m_manager->GetIOPluginRegistry()->DetectReaderFileFormat(filename, fileFormat))
-	{
-		fileFormat = m_manager->GetIOPluginRegistry()->FindReaderIDByDescription("FBX binary (*.fbx)");
-	}
-
-	// データのインポート
-	if (!m_importer->Initialize(filename, fileFormat))
-	{
-		return false;
-	}
-
-	if (!m_importer->Import(m_scene))
-	{
-		return false;
-	}
-
-	// fbxの軸系統をDirectX系にしておく
-	if (m_scene->GetGlobalSettings().GetAxisSystem() != FbxAxisSystem::DirectX)
-	{
-		FbxAxisSystem::DirectX.ConvertScene(m_scene);
-	}
-
-	// ジオメトリコンバータの作成
-	FbxGeometryConverter geometryConverter(m_manager);
-	// ポリゴンを全て三角形化
-	geometryConverter.Triangulate(m_scene, true);
-	// マテリアルごとにメッシュを分割
-	//geometryConverter.SplitMeshesPerMaterial(scene_, true);
-
-	// パース開始
-	SetUp();
-
-
-	return true;
-}
-
-/*
-	@brief	データの解放
+	@brief	解放
 */
 void FbxLoader::Release()
 {
+	m_meshNodeArray.clear();
+
 	if (m_importer)
 	{
 		m_importer->Destroy();
@@ -157,347 +100,460 @@ void FbxLoader::Release()
 		m_scene = nullptr;
 	}
 
-	if (m_manager)
+	if (m_sdkManager)
 	{
-		m_manager->Destroy();
-		m_manager = nullptr;
+		m_sdkManager->Destroy();
+		m_sdkManager = nullptr;
 	}
 }
 
 /*
-	@brief	メッシュノードの取得
+	@brief	FBXファイルのロード
 */
-FbxMeshNode& FbxLoader::GetNode(const uint32_t id)
+HRESULT FbxLoader::LoadFBX(const char* fileName)
 {
-	return m_meshNodes[id];
+	if (!fileName)
+	{
+		MessageBox(0, L"Not FBX FileName", NULL, MB_OK);
+		return E_FAIL;
+	}
+	HRESULT hr = S_OK;
+	InitializeSdkObjects(m_sdkManager, m_scene);
+	if (!m_sdkManager)
+	{
+		MessageBox(0, L"Can't Init SDK Manager", NULL, MB_OK);
+		return E_FAIL;
+	}
+
+	//インポータの作成
+	int lFileFormat = -1;
+	m_importer = fbxsdk::FbxImporter::Create(m_sdkManager, "");
+	if (!m_sdkManager->GetIOPluginRegistry()->DetectReaderFileFormat(fileName, lFileFormat))
+	{
+		//認識できない形式。FBXのバイナリ―にフォールバック
+		lFileFormat = m_sdkManager->GetIOPluginRegistry()->FindReaderIDByDescription("FBX binary (*.fbx)");;
+	}
+
+	//ファイル名を指定しインポータを初期化
+	if (!m_importer || m_importer->Initialize(fileName, lFileFormat) == false)
+	{
+		MessageBox(0, L"Can't Init Importer", NULL, MB_OK);
+		return E_FAIL;
+	}
+	if (!m_importer || m_importer->Import(m_scene) == false)
+	{
+		MessageBox(0, L"Can't Import Scene", NULL, MB_OK);
+		return E_FAIL;
+	}
+
+	//DirectXに変換
+	FbxAxisSystem OurAxisSystem = FbxAxisSystem::DirectX;
+	FbxAxisSystem SceneAxisSystem = m_scene->GetGlobalSettings().GetAxisSystem();
+	if (SceneAxisSystem != OurAxisSystem)
+	{
+		FbxAxisSystem::DirectX.ConvertScene(m_scene);
+	}
+
+#if 0
+	// 単位系の統一
+	// 不要でもいいかも
+	FbxSystemUnit SceneSystemUnit = m_scene->GetGlobalSettings().GetSystemUnit();
+	if (SceneSystemUnit.GetScaleFactor() != 1.0)
+	{
+		// センチメーター単位にコンバートする
+		FbxSystemUnit::cm.ConvertScene(m_scene);
+	}
+#endif
+
+	// 三角形化(三角形以外のデータでもコレで安心)
+	TriangulateRecursive(m_scene->GetRootNode());
+
+	Setup();
+
+	return hr;
 }
 
 /*
-	@brief	メッシュノード数の取得
+	@brief	SDK周りの初期化
 */
-std::size_t FbxLoader::GetNodeCount()
+void FbxLoader::InitializeSdkObjects(FbxManager*& manager, FbxScene*& scene)
 {
-	return m_meshNodes.size();
+	//FBXマネージャの作成
+	manager = FbxManager::Create();
+	if (!manager)
+	{
+		MessageBox(0, L"Not SDK Manager", NULL, MB_OK);
+		exit(1);
+	}
+
+	//IOSettingsオブジェクトの作成。全てのインポート・エクスポート設定を保持する。
+	FbxIOSettings* ios = FbxIOSettings::Create(manager, IOSROOT);
+	manager->SetIOSettings(ios);
+
+	//実行可能ディレクトリからプラグインをロード
+	FbxString lPath = FbxGetApplicationDirectory();
+	manager->LoadPluginsDirectory(lPath.Buffer());
+
+	//FBXシーンの作成。ファイルからインポート/エクスポートされるほとんどのオブジェクトを保持する。
+	scene = FbxScene::Create(manager, "My Scene");
+	if (!scene)
+	{
+		MessageBox(0, L"Not FbxScene", NULL, MB_OK);
+		exit(1);
+	}
 }
 
 /*
-	@breif	FBX全体のパース
+	@brief	三角形化
 */
-void FbxLoader::SetUp()
+void FbxLoader::TriangulateRecursive(FbxNode* node)
+{
+	FbxNodeAttribute* lNodeAttribute = node->GetNodeAttribute();
+
+	if (lNodeAttribute)
+	{
+		if (lNodeAttribute->GetAttributeType() == FbxNodeAttribute::eMesh ||
+			lNodeAttribute->GetAttributeType() == FbxNodeAttribute::eNurbs ||
+			lNodeAttribute->GetAttributeType() == FbxNodeAttribute::eNurbsSurface ||
+			lNodeAttribute->GetAttributeType() == FbxNodeAttribute::ePatch)
+		{
+			FbxGeometryConverter lConverter(node->GetFbxManager());
+			lConverter.Triangulate(m_scene, true);
+		}
+	}
+
+	const int lChildCount = node->GetChildCount();
+	for (int lChildIndex = 0; lChildIndex < lChildCount; ++lChildIndex)
+	{
+		// 子ノードを探索
+		TriangulateRecursive(node->GetChild(lChildIndex));
+	}
+}
+
+/*
+	@brief	ルートノードの取得
+*/
+FbxNode& FbxLoader::GetRootNode()
+{
+	return *m_scene->GetRootNode();
+}
+
+/*
+	@brief	パース
+*/
+void FbxLoader::Setup()
 {
 	if (m_scene->GetRootNode())
 	{
-		// 最初のノード名はnullって名前にしておく
-		std::string name = "null";
-
-		SetUpNode(m_scene->GetRootNode(), name);
+		SetupNode(m_scene->GetRootNode(), "null");
 	}
 }
 
 /*
-	@brief	ノードをパース
+	@brief	ノードの設定
 */
-void FbxLoader::SetUpNode(FbxNode* node, std::string& parentName)
+void FbxLoader::SetupNode(FbxNode* node, std::string parentName)
 {
-	if (m_scene->GetRootNode())
-	{
-		// 最初のノード名はnullって名前にしておく
-		std::string name = "null";
-
-		SetUpNode(m_scene->GetRootNode(), name);
-	}
-}
-
-/*
-	@brief	頂点データのコピー
-*/
-void FbxLoader::CopyVertex(FbxMesh* mesh, FbxMeshNode* meshNode)
-{
-	if (!mesh)
+	if (!node)
 	{
 		return;
 	}
 
-	// 頂点・法線データは１セットのみ対応
-	meshNode->elements.numPosition = 1;
-	meshNode->elements.numNormal = 1;
+	FBX_MESH_NODE meshNode;
+	meshNode.name = node->GetName();
+	meshNode.parentName = parentName;
+	ZeroMemory(&meshNode.elements, sizeof(MESH_ELEMENTS));
 
-	// 頂点インデックス
-	uint32_t polygonIndex = 0;
-
-	// ポリゴン数を取得
-	int polygonCount = mesh->GetPolygonCount();
-	for (int i = 0; i < polygonCount; i++)
+	FbxMesh* lMesh = node->GetMesh();
+	if (lMesh)
 	{
-		// ポリゴンサイズを取得
-		int polygonSize = mesh->GetPolygonSize(i);
-		for (int j = 0; j < polygonSize; j++)
+		const int lVertexCount = lMesh->GetControlPointsCount();
+
+		if (lVertexCount > 0)
 		{
-			// ポリゴンの番号と、頂点の番号を使ってインデックスを取得
-			int index = mesh->GetPolygonVertex(i, j);
-			meshNode->indices.push_back(polygonIndex);
-
-			// インデックスから頂点座標を取得
-			FbxVector4 position = mesh->GetControlPointAt(index);
-
-			// ポリゴンの番号と、頂点の番号を使って法線データを取得
-			FbxVector4 normal;
-			mesh->GetPolygonVertexNormal(i, j, normal);
-
-			// 頂点・法線のプッシュ
-			meshNode->positions.push_back(position);
-			meshNode->normals.push_back(normal);
-
-			// インデックスをインクリメント
-			++polygonIndex;
+			//頂点があるならノードにコピー
+			CopyVertexData(lMesh, &meshNode);
 		}
 	}
 
-	// UVデータの構築
-	FbxStringList uvSetNames;
-	mesh->GetUVSetNames(uvSetNames);
-
-	// UVは２つ以上あるときもある
-	int uvSetCount = uvSetNames.GetCount();
-	meshNode->elements.numUVSet = uvSetCount;
-
-	bool unmapped = false;
-
-	// UV数分ループ
-	for (int uvIndex = 0; uvIndex < uvSetCount; uvIndex++)
+	//マテリアル
+	const int lMaterialCount = node->GetMaterialCount();
+	for (int i = 0; i < lMaterialCount; i++)
 	{
-		// UVセットの番号を設定
-		meshNode->uvSetID[uvSetNames.GetStringAt(uvIndex)] = uvIndex;
-		for (int i = 0; i < polygonCount; i++)
+		FbxSurfaceMaterial* mat = node->GetMaterial(i);
+		if (!mat)
 		{
-			int polygonSize = mesh->GetPolygonSize(i);
-			for (int j = 0; j < polygonSize; j++)
-			{
-				FbxString name = uvSetNames.GetStringAt(uvIndex);
-
-				FbxVector2 texCoord;
-				// ポリゴンの番号と、頂点の番号・UVセット名を使ってUV座標を取得
-				mesh->GetPolygonVertexUV(i, j, name, texCoord, unmapped);
-				meshNode->texCoords.push_back(texCoord);
-			}
+			continue;
 		}
+		FBX_MATERIAL_NODE destMat;
+		CopyMatrialData(mat, &destMat);
+
+		meshNode.materialArray.push_back(destMat);
+	}
+
+	ComputeNodeMatrix(node, &meshNode);
+	m_meshNodeArray.push_back(meshNode);
+	const int lCount = node->GetChildCount();
+	for (int i = 0; i < lCount; i++)
+	{
+		SetupNode(node->GetChild(i), meshNode.name);
 	}
 }
 
 /*
-	@brief	マテリアルのコピー
+	@brief	FBXのカラー情報セット
 */
-void FbxLoader::CopyMaterial(FbxSurfaceMaterial* material, FbxMaterialNode* materialNode)
+void FbxLoader::SetFbxColor(FBX_MATERIAL_ELEMENT& destColor, const FbxDouble3 srcColor)
 {
-	if (!material)
-	{
-		return;
-	}
-
-	// マテリアルの計算方法の設定
-	if (material->GetClassId().Is(FbxSurfaceLambert::ClassId))
-	{
-		materialNode->type = FbxMaterialNode::eLambert;
-	}
-	else if (material->GetClassId().Is(FbxSurfacePhong::ClassId))
-	{
-		materialNode->type = FbxMaterialNode::ePhong;
-	}
-
-	// マテリアル要素を取得
-
-	// アンビエントカラー
-	const FbxDouble3 ambient = GetMaterialProperty(material,
-		FbxSurfaceMaterial::sAmbient,
-		FbxSurfaceMaterial::sAmbientFactor,
-		&materialNode->ambient);
-	SetFbxColor(&materialNode->ambient, ambient);
-
-	// ディフューズカラー
-	const FbxDouble3 diffuse = GetMaterialProperty(material,
-		FbxSurfaceMaterial::sDiffuse,
-		FbxSurfaceMaterial::sDiffuseFactor,
-		&materialNode->diffuse);
-	SetFbxColor(&materialNode->diffuse, diffuse);
-
-	// エミッシブカラー
-	const FbxDouble3 emissive = GetMaterialProperty(material,
-		FbxSurfaceMaterial::sEmissive,
-		FbxSurfaceMaterial::sEmissiveFactor,
-		&materialNode->emissive);
-	SetFbxColor(&materialNode->emissive, emissive);
-
-	// スペキュラカラー
-	const FbxDouble3 specular = GetMaterialProperty(material,
-		FbxSurfaceMaterial::sSpecular,
-		FbxSurfaceMaterial::sSpecularFactor,
-		&materialNode->specular);
-	SetFbxColor(&materialNode->specular, specular);
-
-
-	// 輝きのつよさ
-	FbxProperty shininessProperty = material->FindProperty(FbxSurfaceMaterial::sShininess);
-	if (shininessProperty.IsValid())
-	{
-		double shininess = shininessProperty.Get<FbxDouble>();
-		materialNode->shininess = static_cast<float>(shininess);
-	}
-
-	// マテリアル自体の透過度
-	FbxProperty transparencyProperty = material->FindProperty(FbxSurfaceMaterial::sTransparencyFactor);
-	if (transparencyProperty.IsValid())
-	{
-		double transparency = transparencyProperty.Get<FbxDouble>();
-		materialNode->transparency = static_cast<float>(transparency);
-	}
+	destColor.a = 1.0f;
+	destColor.r = static_cast<float>(srcColor[0]);
+	destColor.g = static_cast<float>(srcColor[1]);
+	destColor.b = static_cast<float>(srcColor[2]);
 }
 
 /*
-	@brief	ノードの行列を計算
+	@brief	マテリアルプロパティの取得
 */
-void FbxLoader::ComputeNodeMatrix(FbxNode* node, FbxMeshNode* meshNode)
+FbxDouble3 FbxLoader::GetMaterialProperty(const FbxSurfaceMaterial * pMaterial, const char * pPropertyName,
+	const char * pFactorPropertyName, FBX_MATERIAL_ELEMENT*	pElement)
 {
-	if (!node || !meshNode)
+	pElement->type = FBX_MATERIAL_ELEMENT::ELEMENT_NONE;
+
+	FbxDouble3 lResult(0, 0, 0);
+	const FbxProperty lProperty = pMaterial->FindProperty(pPropertyName);
+	const FbxProperty lFactorProperty = pMaterial->FindProperty(pFactorPropertyName);
+	if (lProperty.IsValid() && lFactorProperty.IsValid())
 	{
-		return;
-	}
-
-	FbxAnimEvaluator* evaluator = m_scene->GetAnimationEvaluator();
-
-	FbxMatrix globalMat;
-	globalMat.SetIdentity();
-
-	if (node != m_scene->GetRootNode())
-	{
-		globalMat = evaluator->GetNodeGlobalTransform(node);
-	}
-	FbxMatrixToFloat16(&globalMat, meshNode->mat4x4);
-}
-
-/*
-	@brief	FBX用カラーデータをマテリアルにコピー
-*/
-void FbxLoader::SetFbxColor(FbxMaterialElement* element, const FbxDouble3 color)
-{
-	element->a = 1.0f;
-	element->r = static_cast<float>(color[0]);
-	element->g = static_cast<float>(color[1]);
-	element->b = static_cast<float>(color[2]);
-}
-
-/*
-	@brief	FBX用の行列データを通常にfloat配列にコピー
-*/
-void FbxLoader::FbxMatrixToFloat16(FbxMatrix* matrix, float array[16])
-{
-	uint32_t index = 0;
-	for (int i = 0; i < 4; i++)
-	{
-		for (int j = 0; j < 4; j++)
+		lResult = lProperty.Get<FbxDouble3>();
+		double lFactor = lFactorProperty.Get<FbxDouble>();
+		if (lFactor != 1)
 		{
-			array[index] = static_cast<float>(matrix->Get(i, j));
-			index++;
+			lResult[0] *= lFactor;
+			lResult[1] *= lFactor;
+			lResult[2] *= lFactor;
 		}
-	}
-}
 
-/*
-	@brief	マテリアル要素の取得
-*/
-FbxDouble3 FbxLoader::GetMaterialProperty(const FbxSurfaceMaterial* material,const char* propertyName, const char* factorPropertyName, FbxMaterialElement* element)
-{
-	element->type = FbxMaterialElement::eNone;
-
-	FbxDouble3 result(0.0, 0.0, 0.0);
-
-	// 引数を使ってマテリアルプロパティを取得
-	const FbxProperty property = material->FindProperty(propertyName);
-	const FbxProperty factorProperty = material->FindProperty(factorPropertyName);
-
-	// マテリアルカラーの取得
-	if (property.IsValid() && factorProperty.IsValid())
-	{
-		result = property.Get<FbxDouble3>();
-		double factor = factorProperty.Get<FbxDouble>();
-		if (factor != 1)
-		{
-			result[0] *= factor;
-			result[1] *= factor;
-			result[2] *= factor;
-		}
-		element->type = FbxMaterialElement::eColor;
+		pElement->type = FBX_MATERIAL_ELEMENT::ELEMENT_COLOR;
 	}
 
-	// テクスチャの取得処理
-	if (property.IsValid())
+	if (lProperty.IsValid())
 	{
-		// 正しく取得できたテクスチャを数える
 		int existTextureCount = 0;
+		const int lTextureCount = lProperty.GetSrcObjectCount<FbxFileTexture>();
 
-		// マテリアルにあるテクスチャ数を取得
-		const int textureCount = property.GetSrcObjectCount<FbxFileTexture>();
-		for (int i = 0; i < textureCount; i++)
+		for (int i = 0; i < lTextureCount; i++)
 		{
-			// ファイル名を取得
-			FbxFileTexture* file = property.GetSrcObject<FbxFileTexture>(i);
-
-			// ファイル名が取れなければ無視
-			if (!file)
-			{
+			FbxFileTexture* lFileTexture = lProperty.GetSrcObject<FbxFileTexture>(i);
+			if (!lFileTexture)
 				continue;
-			}
 
-			// UVセット名を取得
-			FbxString uvSet = file->UVSet.Get();
-			std::string uvSetString = uvSet.Buffer();
+			FbxString uvsetName = lFileTexture->UVSet.Get();
+			std::string uvSetString = uvsetName.Buffer();
+			std::string filepath = lFileTexture->GetFileName();
 
-			// ファイル名はフルパスで入っているので、余分なパスをカットしてファイル名のみにする処理
-			std::string filename = FbxPathUtils::GetFileName(file->GetFileName());
-
-			// UVセット名を使って、ファイル名を保存
-			element->textureSets[uvSetString].push_back(filename);
-
-			// テクスチャ数をインクリメント
+			pElement->textureSetArray[uvSetString].push_back(filepath);
 			existTextureCount++;
 		}
 
-		// マルチレイヤ時のテクスチャ取得処理もしておく
-		// 基本的なながれは上と同じ。
-		const int layeredTextureCount = property.GetSrcObjectCount<FbxLayeredTexture>();
-		for (int i = 0; i < layeredTextureCount; i++)
+		const int lLayeredTextureCount = lProperty.GetSrcObjectCount<FbxLayeredTexture>();
+
+		for (int i = 0; i < lLayeredTextureCount; i++)
 		{
-			FbxLayeredTexture* layeredTexture = property.GetSrcObject<FbxLayeredTexture>(i);
-			const int fileCount = layeredTexture->GetSrcObjectCount<FbxFileTexture>();
-			for (int j = 0; j < fileCount; j++)
+			FbxLayeredTexture* lLayeredTexture = lProperty.GetSrcObject<FbxLayeredTexture>(i);
+
+			const int lTextureFileCount = lLayeredTexture->GetSrcObjectCount<FbxFileTexture>();
+
+			for (int j = 0; j < lTextureFileCount; j++)
 			{
-				FbxFileTexture* file = layeredTexture->GetSrcObject<FbxFileTexture>(j);
-				if (!file)
-				{
+				FbxFileTexture* lFileTexture = lLayeredTexture->GetSrcObject<FbxFileTexture>(j);
+				if (!lFileTexture)
 					continue;
-				}
 
-				FbxString uvSet = file->UVSet.Get();
-				std::string uvSetString = uvSet.Buffer();
-				std::string filename = file->GetFileName();
+				FbxString uvsetName = lFileTexture->UVSet.Get();
+				std::string uvSetString = uvsetName.Buffer();
+				std::string filepath = lFileTexture->GetFileName();
 
-				element->textureSets[uvSetString].push_back(filename);
+				pElement->textureSetArray[uvSetString].push_back(filepath);
 				existTextureCount++;
 			}
 		}
 
-		// テクスチャがあればマテリアル要素の設定
 		if (existTextureCount > 0)
 		{
-			if (element->type == FbxMaterialElement::eColor)
-			{
-				element->type = FbxMaterialElement::eBoth;
-			}
+			if (pElement->type == FBX_MATERIAL_ELEMENT::ELEMENT_COLOR)
+				pElement->type = FBX_MATERIAL_ELEMENT::ELEMENT_BOTH;
 			else
-			{
-				element->type = FbxMaterialElement::eTexture;
-			}
+				pElement->type = FBX_MATERIAL_ELEMENT::ELEMENT_TEXTURE;
 		}
 	}
 
-	return result;
+	return lResult;
+}
+
+/*
+	@brief	マテリアルデータのコピー
+*/
+void FbxLoader::CopyMatrialData(FbxSurfaceMaterial* mat, FBX_MATERIAL_NODE* destMat)
+{
+	if (!mat)
+	{
+		return;
+	}
+
+	if (mat->GetClassId().Is(FbxSurfaceLambert::ClassId))
+	{
+		destMat->type = FBX_MATERIAL_NODE::MATERIAL_LAMBERT;
+	}
+	else if (mat->GetClassId().Is(FbxSurfacePhong::ClassId))
+	{
+		destMat->type = FBX_MATERIAL_NODE::MATERIAL_PHONG;
+	}
+
+	const FbxDouble3 lEmissive = GetMaterialProperty(mat,FbxSurfaceMaterial::sEmissive, 
+		FbxSurfaceMaterial::sEmissiveFactor, &destMat->emmisive);
+	SetFbxColor(destMat->emmisive, lEmissive);
+
+	const FbxDouble3 lAmbient = GetMaterialProperty(mat,FbxSurfaceMaterial::sAmbient, 
+		FbxSurfaceMaterial::sAmbientFactor, &destMat->ambient);
+	SetFbxColor(destMat->ambient, lAmbient);
+
+	const FbxDouble3 lDiffuse = GetMaterialProperty(mat,FbxSurfaceMaterial::sDiffuse, 
+		FbxSurfaceMaterial::sDiffuseFactor, &destMat->diffuse);
+	SetFbxColor(destMat->diffuse, lDiffuse);
+
+	const FbxDouble3 lSpecular = GetMaterialProperty(mat,FbxSurfaceMaterial::sSpecular, 
+		FbxSurfaceMaterial::sSpecularFactor, &destMat->specular);
+	SetFbxColor(destMat->specular, lSpecular);
+
+	//
+	FbxProperty lTransparencyFactorProperty = mat->FindProperty(FbxSurfaceMaterial::sTransparencyFactor);
+	if (lTransparencyFactorProperty.IsValid())
+	{
+		double lTransparencyFactor = lTransparencyFactorProperty.Get<FbxDouble>();
+		destMat->transparencyFactor = static_cast<float>(lTransparencyFactor);
+	}
+
+	// Specular Power
+	FbxProperty lShininessProperty = mat->FindProperty(FbxSurfaceMaterial::sShininess);
+	if (lShininessProperty.IsValid())
+	{
+		double lShininess = lShininessProperty.Get<FbxDouble>();
+		destMat->shininess = static_cast<float>(lShininess);
+	}
+}
+
+/*
+	@brief	ノードの行列の計算
+*/
+void FbxLoader::ComputeNodeMatrix(FbxNode* pNode, FBX_MESH_NODE* meshNode)
+{
+	if (!pNode || !meshNode)
+	{
+		return;
+	}
+
+	//FbxAnimEvaluator* lEvaluator = mScene->GetEvaluator();
+	FbxAnimEvaluator* lEvaluator = m_scene->GetAnimationEvaluator();
+	FbxMatrix lGlobal;
+	lGlobal.SetIdentity();
+
+	if (pNode != m_scene->GetRootNode())
+	{
+		lGlobal = lEvaluator->GetNodeGlobalTransform(pNode);
+
+		FBXMatrixToFloat16(&lGlobal, meshNode->mat4x4);
+	}
+	else
+	{
+		FBXMatrixToFloat16(&lGlobal, meshNode->mat4x4);
+	}
+}
+
+/*
+	@brief	バーテックスデータのコピー
+*/
+void FbxLoader::CopyVertexData(FbxMesh*	pMesh, FBX_MESH_NODE* meshNode)
+{
+	if (!pMesh)
+	{
+		return;
+	}
+
+	int lPolygonCount = pMesh->GetPolygonCount();
+
+	FbxVector4 pos, nor;
+
+	meshNode->elements.numPosition = 1;
+	meshNode->elements.numNormal = 1;
+
+	unsigned int indx = 0;
+
+	for (int i = 0; i<lPolygonCount; i++)
+	{
+		// ポリゴン内の頂点数(一応、三角形化してるので3点のはずだがチェック)
+		int lPolygonsize = pMesh->GetPolygonSize(i);
+
+		for (int pol = 0; pol<lPolygonsize; pol++)
+		{
+			int index = pMesh->GetPolygonVertex(i, pol);
+			meshNode->indexArray.push_back(indx);
+
+			pos = pMesh->GetControlPointAt(index);
+			pMesh->GetPolygonVertexNormal(i, pol, nor);
+
+			meshNode->positionArray.push_back(pos);
+			meshNode->normalArray.push_back(nor);
+
+			++indx;
+		}
+	}
+
+	// UV処理(UVは2つ以上ある場合があるので別処理)
+	FbxStringList	uvsetName;
+	pMesh->GetUVSetNames(uvsetName);
+	int numUVSet = uvsetName.GetCount();
+	meshNode->elements.numUVSet = numUVSet;
+
+	bool unmapped = false;
+
+	for (int uv = 0; uv<numUVSet; uv++)
+	{
+		meshNode->uvsetID[uvsetName.GetStringAt(uv)] = uv;
+		for (int i = 0; i<lPolygonCount; i++)
+		{
+			int lPolygonsize = pMesh->GetPolygonSize(i);
+
+			for (int pol = 0; pol<lPolygonsize; pol++)
+			{
+				FbxString name = uvsetName.GetStringAt(uv);
+				FbxVector2 texCoord;
+				pMesh->GetPolygonVertexUV(i, pol, name, texCoord, unmapped);
+				meshNode->texcoordArray.push_back(texCoord);
+			}
+		}
+	}
+}
+
+/*
+	@brief	ノードの取得
+*/
+FBX_MESH_NODE& FbxLoader::GetNode(const unsigned int id)
+{
+	return m_meshNodeArray[id];
+}
+
+/*
+	@brief	マトリックスをfloatへ変換
+*/
+void FbxLoader::FBXMatrixToFloat16(FbxMatrix* src, float dest[16])
+{
+	unsigned int nn = 0;
+	for (int i = 0; i<4; i++)
+	{
+		for (int j = 0; j<4; j++)
+		{
+			dest[nn] = static_cast<float>(src->Get(i, j));
+			nn++;
+		}
+	}
 }
